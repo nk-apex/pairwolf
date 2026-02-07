@@ -1,18 +1,54 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: text("username").notNull().unique(),
-  password: text("password").notNull(),
+export const sessionStatusEnum = ["pending", "connecting", "connected", "failed", "terminated"] as const;
+export type SessionStatus = typeof sessionStatusEnum[number];
+
+export interface Session {
+  id: string;
+  sessionId: string;
+  pairingCode: string | null;
+  qrCode: string | null;
+  status: SessionStatus;
+  connectionMethod: "pairing" | "qr";
+  createdAt: string;
+  linkedAt: string | null;
+  credentialsBase64: string | null;
+}
+
+export interface CreateSessionRequest {
+  method: "pairing" | "qr";
+  phoneNumber?: string;
+}
+
+export const createSessionSchema = z.object({
+  method: z.enum(["pairing", "qr"]),
+  phoneNumber: z.string().optional(),
 });
 
-export const insertUserSchema = createInsertSchema(users).pick({
-  username: true,
-  password: true,
+export interface PairingVerifyRequest {
+  sessionId: string;
+  code: string;
+}
+
+export const pairingVerifySchema = z.object({
+  sessionId: z.string(),
+  code: z.string().length(8),
 });
 
-export type InsertUser = z.infer<typeof insertUserSchema>;
-export type User = typeof users.$inferSelect;
+export interface SessionResponse {
+  sessionId: string;
+  pairingCode?: string;
+  qrCode?: string;
+  status: SessionStatus;
+  message: string;
+}
+
+export interface VerifyResponse {
+  status: SessionStatus;
+  sessionId: string;
+  credentialsBase64?: string;
+  message: string;
+}
+
+export type User = { id: string; username: string; password: string };
+export type InsertUser = { username: string; password: string };
