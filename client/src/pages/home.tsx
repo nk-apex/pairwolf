@@ -359,7 +359,7 @@ export default function Home() {
                   <Terminal className="w-5 h-5 text-green-400" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-white font-mono">Session Generator</h2>
+                  <h2 className="text-lg font-bold text-white font-mono">WolfBot Pair</h2>
                   <p className="text-xs text-gray-500 font-mono">Initialize a new WhatsApp connection</p>
                 </div>
               </div>
@@ -688,7 +688,7 @@ export default function Home() {
         <footer className="mt-16 text-center border-t border-gray-800/50 pt-8 pb-4">
           <div className="flex items-center justify-center gap-2 mb-3">
             <Bot className="w-4 h-4 text-green-500/40" />
-            <span className="font-mono text-xs text-gray-600">WOLFBOT Session Generator</span>
+            <span className="font-mono text-xs text-gray-600">WOLFBOT Pair</span>
           </div>
           <p className="text-gray-700 text-[10px] font-mono">
             Built with security in mind. All connections are end-to-end encrypted.
