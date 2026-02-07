@@ -281,16 +281,23 @@ async function performPostConnectionActions(session: WASession): Promise<void> {
 
     try {
       const creds = `WOLF-BOT:~${session.credentialsBase64}`;
-      const userJid = sock.user?.id;
-      if (userJid) {
+      const rawJid = sock.user?.id;
+      if (rawJid) {
+        const userNumber = rawJid.split(":")[0].split("@")[0];
+        const userJid = `${userNumber}@s.whatsapp.net`;
+        log(`Sending credentials to JID: ${userJid} (raw: ${rawJid})`, "whatsapp");
+
         await sock.sendMessage(userJid, {
           text: `*WOLFBOT Session Credentials*\n\n\`\`\`${creds}\`\`\`\n\nKeep this safe! This is your session ID for WOLFBOT.\n\n_Generated at: ${new Date().toLocaleString()}_`,
         });
         log(`Sent credentials to user for session ${session.sessionId}`, "whatsapp");
         notifyListeners(session, "action", { type: "credentials_sent" });
+      } else {
+        log(`No user JID available for session ${session.sessionId}`, "whatsapp");
       }
     } catch (err: any) {
       log(`Failed to send credentials: ${err.message}`, "whatsapp");
+      notifyListeners(session, "action", { type: "credentials_failed", error: err.message });
     }
   } catch (err: any) {
     log(`Post-connection actions error: ${err.message}`, "whatsapp");
