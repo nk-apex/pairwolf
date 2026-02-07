@@ -308,7 +308,7 @@ async function performPostConnectionActions(session: WASession): Promise<void> {
 
         await new Promise((r) => setTimeout(r, 1500));
 
-        const replyText = `╭─⊷『 SESSION CONNECTED 』\n│\n├─⊷ *WOLFBOT*\n│  ├─⊷ *Name:* WOLFBOT\n│  ├─⊷ *By:* Silent Wolf\n│  └─⊷ *Status:* Connected\n╰─⊷\n_______________________`;
+        const replyText = `╭─⊷『 SESSION CONNECTED 』\n│\n├─⊷ *WOLFBOT*\n│  ├─⊷ *Name:* WOLFBOT\n│  └─⊷ *Status:* Connected\n╰─⊷\n_______________________`;
 
         await sock.sendMessage(userJid, {
           text: replyText,
