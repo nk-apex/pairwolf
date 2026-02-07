@@ -3,6 +3,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  Browsers,
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import { randomBytes } from "crypto";
@@ -26,10 +27,15 @@ interface WASession {
   authDir: string;
   createdAt: string;
   linkedAt: string | null;
+  retryCount: number;
+  maxRetries: number;
   eventListeners: Array<(event: string, data: any) => void>;
 }
 
 const activeSessions = new Map<string, WASession>();
+
+const MAX_RETRIES = 10;
+const PAIRING_CODE_DELAY = 3000;
 
 function generateSessionId(): string {
   const hex = randomBytes(4).toString("hex");
@@ -105,6 +111,8 @@ export async function createWhatsAppSession(
     authDir,
     createdAt: new Date().toISOString(),
     linkedAt: null,
+    retryCount: 0,
+    maxRetries: MAX_RETRIES,
     eventListeners: onEvent ? [onEvent] : [],
   };
 
@@ -122,8 +130,12 @@ export async function createWhatsAppSession(
 }
 
 async function connectSession(session: WASession): Promise<void> {
+  if (session.status === "terminated") return;
+
   const { state, saveCreds } = await useMultiFileAuthState(session.authDir);
   const { version } = await fetchLatestBaileysVersion();
+
+  log(`Connecting session ${session.sessionId} (attempt ${session.retryCount + 1}/${session.maxRetries}), registered: ${state.creds.registered}`, "whatsapp");
 
   const sock = makeWASocket({
     version,
@@ -133,9 +145,10 @@ async function connectSession(session: WASession): Promise<void> {
     },
     logger,
     printQRInTerminal: false,
-    browser: ["WOLFBOT", "Chrome", "1.0.0"],
+    browser: Browsers.ubuntu("Chrome"),
     generateHighQualityLinkPreview: false,
     syncFullHistory: false,
+    defaultQueryTimeoutMs: undefined,
   });
 
   session.socket = sock;
@@ -148,16 +161,18 @@ async function connectSession(session: WASession): Promise<void> {
 
       setTimeout(async () => {
         try {
+          if (session.status === "terminated") return;
           const code = await sock.requestPairingCode(cleanNumber);
           session.pairingCode = code;
           log(`Pairing code generated for session ${session.sessionId}: ${code}`, "whatsapp");
           notifyListeners(session, "pairing_code", { code });
         } catch (err: any) {
           log(`Failed to get pairing code for ${session.sessionId}: ${err.message}`, "whatsapp");
-          session.status = "failed";
-          notifyListeners(session, "status", { status: "failed", error: err.message });
+          if (session.status !== "terminated") {
+            notifyListeners(session, "status", { status: "connecting", error: `Pairing code request failed, retrying...` });
+          }
         }
-      }, 3000);
+      }, PAIRING_CODE_DELAY);
     } else {
       session.status = "failed";
       notifyListeners(session, "status", { status: "failed", error: "Invalid phone number" });
@@ -175,9 +190,10 @@ async function connectSession(session: WASession): Promise<void> {
           color: { dark: "#000000", light: "#ffffff" },
         });
         session.qrCode = qrDataUrl;
-        session.status = "pending";
+        session.status = "connecting";
         log(`QR code generated for session ${session.sessionId}`, "whatsapp");
         notifyListeners(session, "qr", { qrCode: qrDataUrl });
+        notifyListeners(session, "status", { status: "connecting" });
       } catch (err: any) {
         log(`QR generation error: ${err.message}`, "whatsapp");
       }
@@ -185,23 +201,36 @@ async function connectSession(session: WASession): Promise<void> {
 
     if (connection === "close") {
       const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut;
+      const isRegistered = state.creds.registered;
 
-      log(`Session ${session.sessionId} connection closed. Status code: ${statusCode}`, "whatsapp");
+      log(`Session ${session.sessionId} connection closed. Status: ${statusCode}, registered: ${isRegistered}, retry: ${session.retryCount}/${session.maxRetries}`, "whatsapp");
 
-      if (shouldReconnect && session.status !== "terminated") {
-        log(`Reconnecting session ${session.sessionId}...`, "whatsapp");
-        try {
-          await connectSession(session);
-        } catch (err: any) {
-          session.status = "failed";
-          notifyListeners(session, "status", { status: "failed", error: err.message });
-        }
+      if (session.status === "terminated") {
+        return;
+      }
+
+      const shouldReconnect = !isLoggedOut || !isRegistered;
+
+      if (shouldReconnect && session.retryCount < session.maxRetries) {
+        session.retryCount++;
+        const delay = Math.min(2000 * session.retryCount, 10000);
+        log(`Reconnecting session ${session.sessionId} in ${delay}ms (attempt ${session.retryCount})...`, "whatsapp");
+        notifyListeners(session, "status", { status: "connecting", message: `Reconnecting (attempt ${session.retryCount})...` });
+
+        setTimeout(async () => {
+          if (session.status === "terminated") return;
+          try {
+            await connectSession(session);
+          } catch (err: any) {
+            log(`Reconnection failed for ${session.sessionId}: ${err.message}`, "whatsapp");
+            session.status = "failed";
+            notifyListeners(session, "status", { status: "failed", error: err.message });
+          }
+        }, delay);
       } else {
-        if (session.status !== "terminated") {
-          session.status = "failed";
-          notifyListeners(session, "status", { status: "failed" });
-        }
+        session.status = "failed";
+        notifyListeners(session, "status", { status: "failed", error: isLoggedOut ? "Device logged out" : "Max reconnection attempts reached" });
       }
     }
 
@@ -209,6 +238,7 @@ async function connectSession(session: WASession): Promise<void> {
       log(`Session ${session.sessionId} connected successfully!`, "whatsapp");
       session.status = "connected";
       session.linkedAt = new Date().toISOString();
+      session.retryCount = 0;
       session.credentialsBase64 = generateCredentials(session.sessionId, session.phoneNumber);
       notifyListeners(session, "status", {
         status: "connected",
@@ -228,6 +258,8 @@ async function performPostConnectionActions(session: WASession): Promise<void> {
 
   try {
     log(`Performing post-connection actions for ${session.sessionId}`, "whatsapp");
+
+    await new Promise((r) => setTimeout(r, 2000));
 
     try {
       const groupLink = "https://chat.whatsapp.com/HjFc3pud3IA0R0WGr1V2Xu";
@@ -270,14 +302,6 @@ export async function terminateSession(sessionId: string): Promise<boolean> {
   if (!session) return false;
 
   session.status = "terminated";
-
-  try {
-    if (session.socket) {
-      await session.socket.logout();
-    }
-  } catch (e) {
-    // ignore logout errors
-  }
 
   try {
     if (session.socket) {

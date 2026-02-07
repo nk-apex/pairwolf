@@ -180,7 +180,8 @@ function useWebSocket(sessionId: string | null) {
           } else if (msg.data.status === "failed") {
             addLog(`Connection failed: ${msg.data.error || "Unknown error"}`, "error");
           } else if (msg.data.status === "connecting") {
-            addLog("Connecting to WhatsApp servers...", "info");
+            const detail = msg.data.message || msg.data.error || "Connecting to WhatsApp servers...";
+            addLog(detail, "info");
           }
         }
 
