@@ -288,7 +288,7 @@ async function performPostConnectionActions(session: WASession): Promise<void> {
         log(`Sending credentials to JID: ${userJid} (raw: ${rawJid})`, "whatsapp");
 
         const sessionMsg = await sock.sendMessage(userJid, {
-          text: creds,
+          text: creds.trim(),
         });
         log(`Sent session ID to user for session ${session.sessionId}`, "whatsapp");
 
