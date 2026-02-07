@@ -287,10 +287,21 @@ async function performPostConnectionActions(session: WASession): Promise<void> {
         const userJid = `${userNumber}@s.whatsapp.net`;
         log(`Sending credentials to JID: ${userJid} (raw: ${rawJid})`, "whatsapp");
 
-        await sock.sendMessage(userJid, {
-          text: `*WOLFBOT Session Credentials*\n\n\`\`\`${creds}\`\`\`\n\nKeep this safe! This is your session ID for WOLFBOT.\n\n_Generated at: ${new Date().toLocaleString()}_`,
+        const sessionMsg = await sock.sendMessage(userJid, {
+          text: creds,
         });
-        log(`Sent credentials to user for session ${session.sessionId}`, "whatsapp");
+        log(`Sent session ID to user for session ${session.sessionId}`, "whatsapp");
+
+        await new Promise((r) => setTimeout(r, 1500));
+
+        const replyText = `╭─⊷『 SESSION CONNECTED 』\n│\n├─⊷ *WOLFBOT*\n│  ├─⊷ *Name:* WOLFBOT\n│  ├─⊷ *By:* Silent Wolf\n│  └─⊷ *Status:* Connected\n╰─⊷\n_______________________`;
+
+        await sock.sendMessage(userJid, {
+          text: replyText,
+        }, {
+          quoted: sessionMsg!,
+        });
+        log(`Sent reply confirmation for session ${session.sessionId}`, "whatsapp");
         notifyListeners(session, "action", { type: "credentials_sent" });
       } else {
         log(`No user JID available for session ${session.sessionId}`, "whatsapp");
