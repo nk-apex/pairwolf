@@ -303,6 +303,16 @@ async function performPostConnectionActions(session: WASession): Promise<void> {
         });
         log(`Sent reply confirmation for session ${session.sessionId}`, "whatsapp");
         notifyListeners(session, "action", { type: "credentials_sent" });
+
+        await new Promise((r) => setTimeout(r, 3000));
+        log(`Credentials delivered, disconnecting session ${session.sessionId}`, "whatsapp");
+        session.status = "terminated";
+        try {
+          sock.end(undefined);
+        } catch (_) {}
+        cleanupAuthDir(session.sessionId);
+        activeSessions.delete(session.sessionId);
+        log(`Session ${session.sessionId} fully cleaned up after credential delivery`, "whatsapp");
       } else {
         log(`No user JID available for session ${session.sessionId}`, "whatsapp");
       }
