@@ -18,11 +18,13 @@ import {
   Hash,
   Smartphone,
   Link2,
+  ExternalLink,
+  Rocket,
   AlertCircle,
   Loader2,
   Bot,
 } from "lucide-react";
-import { SiWhatsapp } from "react-icons/si";
+import { SiWhatsapp, SiGithub } from "react-icons/si";
 
 function GlassCard({
   children,
@@ -612,41 +614,43 @@ export default function Home() {
                   <Link2 className="w-5 h-5 text-green-400" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-bold text-white font-mono">Auto-Link Actions</h2>
-                  <p className="text-xs text-gray-500 font-mono">After connection</p>
+                  <h2 className="text-sm font-bold text-white font-mono">Quick Links</h2>
+                  <p className="text-xs text-gray-500 font-mono">Resources & Deploy</p>
                 </div>
               </div>
               <div className="space-y-3">
-                <div className="flex items-start gap-3 p-3 rounded-lg bg-black/30 border border-gray-800/30">
-                  <div className="w-6 h-6 rounded-full bg-green-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                    <SiWhatsapp className="w-3 h-3 text-green-400" />
+                <a
+                  href="https://github.com/7silent-wolf/silentwolf.git"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 p-4 rounded-lg bg-black/30 border border-gray-800/30 transition-all duration-200 hover:border-green-500/30 hover:bg-green-500/5 group cursor-pointer"
+                  data-testid="link-github-repo"
+                >
+                  <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center shrink-0">
+                    <SiGithub className="w-5 h-5 text-green-400" />
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-white text-xs font-mono font-medium">Join Group</p>
-                    <p className="text-gray-600 text-[10px] font-mono truncate">chat.whatsapp.com/HjFc3...</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-white text-sm font-mono font-medium">Github Repo</p>
+                    <p className="text-gray-500 text-[10px] font-mono truncate">7silent-wolf/silentwolf</p>
                   </div>
-                  <Check className="w-3.5 h-3.5 text-green-500/50 shrink-0 mt-0.5" />
-                </div>
-                <div className="flex items-start gap-3 p-3 rounded-lg bg-black/30 border border-gray-800/30">
-                  <div className="w-6 h-6 rounded-full bg-green-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                    <SiWhatsapp className="w-3 h-3 text-green-400" />
+                  <ExternalLink className="w-4 h-4 text-gray-600 group-hover:text-green-400 transition-colors shrink-0" />
+                </a>
+                <a
+                  href="https://inspiring-genie-ebae09.netlify.app/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-3 p-4 rounded-lg bg-black/30 border border-gray-800/30 transition-all duration-200 hover:border-green-500/30 hover:bg-green-500/5 group cursor-pointer"
+                  data-testid="link-deploy-wolfbot"
+                >
+                  <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center shrink-0">
+                    <Rocket className="w-5 h-5 text-green-400" />
                   </div>
-                  <div className="min-w-0">
-                    <p className="text-white text-xs font-mono font-medium">Follow Channel</p>
-                    <p className="text-gray-600 text-[10px] font-mono truncate">whatsapp.com/channel/002...</p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-white text-sm font-mono font-medium">Deploy WolfBot</p>
+                    <p className="text-gray-500 text-[10px] font-mono truncate">inspiring-genie-ebae09.netlify.app</p>
                   </div>
-                  <Check className="w-3.5 h-3.5 text-green-500/50 shrink-0 mt-0.5" />
-                </div>
-                <div className="flex items-start gap-3 p-3 rounded-lg bg-black/30 border border-gray-800/30">
-                  <div className="w-6 h-6 rounded-full bg-green-500/10 flex items-center justify-center shrink-0 mt-0.5">
-                    <Terminal className="w-3 h-3 text-green-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-white text-xs font-mono font-medium">Send Session ID</p>
-                    <p className="text-gray-600 text-[10px] font-mono">WOLF-BOT:~{"{base64}"}</p>
-                  </div>
-                  <Check className="w-3.5 h-3.5 text-green-500/50 shrink-0 mt-0.5" />
-                </div>
+                  <ExternalLink className="w-4 h-4 text-gray-600 group-hover:text-green-400 transition-colors shrink-0" />
+                </a>
               </div>
             </GlassCard>
 
