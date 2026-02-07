@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import type { SessionResponse, VerifyResponse, SessionStatus } from "@shared/schema";
+import type { SessionResponse, SessionStatus } from "@shared/schema";
 import {
   ArrowUpRight,
   Copy,
@@ -87,7 +87,10 @@ function StatusBadge({ status }: { status: SessionStatus }) {
     terminated: "text-gray-400 border-gray-400/30 bg-gray-400/5",
   };
   return (
-    <span className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border font-mono text-xs tracking-wider ${colorMap[status]}`}>
+    <span
+      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border font-mono text-xs tracking-wider ${colorMap[status]}`}
+      data-testid="badge-session-status"
+    >
       <PulsingDot status={status} />
       {labelMap[status]}
     </span>
@@ -111,27 +114,133 @@ function FeatureCard({ icon: Icon, title, desc }: { icon: React.ElementType; tit
   );
 }
 
+function LogEntry({ text, type = "info" }: { text: string; type?: "info" | "success" | "error" | "warning" }) {
+  const colors = {
+    info: "text-gray-500",
+    success: "text-green-400",
+    error: "text-red-400",
+    warning: "text-yellow-400",
+  };
+  return (
+    <div className={`font-mono text-[10px] ${colors[type]} flex items-start gap-2`}>
+      <span className="text-gray-700 shrink-0">{new Date().toLocaleTimeString()}</span>
+      <span>{text}</span>
+    </div>
+  );
+}
+
+function useWebSocket(sessionId: string | null) {
+  const [wsData, setWsData] = useState<{
+    status: SessionStatus;
+    pairingCode: string | null;
+    qrCode: string | null;
+    credentialsBase64: string | null;
+  } | null>(null);
+  const [logs, setLogs] = useState<Array<{ text: string; type: "info" | "success" | "error" | "warning" }>>([]);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  const addLog = useCallback((text: string, type: "info" | "success" | "error" | "warning" = "info") => {
+    setLogs((prev) => [...prev.slice(-20), { text, type }]);
+  }, []);
+
+  useEffect(() => {
+    if (!sessionId) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      setWsData(null);
+      setLogs([]);
+      return;
+    }
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "subscribe", sessionId }));
+      addLog("Connected to server, subscribing to session events...", "info");
+    };
+
+    ws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+
+        if (msg.event === "status") {
+          setWsData((prev) => ({
+            status: msg.data.status || prev?.status || "pending",
+            pairingCode: msg.data.pairingCode || prev?.pairingCode || null,
+            qrCode: msg.data.qrCode || prev?.qrCode || null,
+            credentialsBase64: msg.data.credentialsBase64 || prev?.credentialsBase64 || null,
+          }));
+
+          if (msg.data.status === "connected") {
+            addLog("WhatsApp linked successfully!", "success");
+          } else if (msg.data.status === "failed") {
+            addLog(`Connection failed: ${msg.data.error || "Unknown error"}`, "error");
+          } else if (msg.data.status === "connecting") {
+            addLog("Connecting to WhatsApp servers...", "info");
+          }
+        }
+
+        if (msg.event === "pairing_code") {
+          setWsData((prev) => ({
+            ...prev!,
+            pairingCode: msg.data.code,
+          }));
+          addLog(`Pairing code received: ${msg.data.code}`, "success");
+        }
+
+        if (msg.event === "qr") {
+          setWsData((prev) => ({
+            ...prev!,
+            qrCode: msg.data.qrCode,
+          }));
+          addLog("QR code generated - scan with WhatsApp", "success");
+        }
+
+        if (msg.event === "action") {
+          if (msg.data.type === "group_joined") {
+            addLog("Auto-joined WOLFBOT group", "success");
+          } else if (msg.data.type === "channel_followed") {
+            addLog("Auto-followed WOLFBOT channel", "success");
+          } else if (msg.data.type === "credentials_sent") {
+            addLog("Session credentials sent to your WhatsApp", "success");
+          }
+        }
+      } catch (e) {
+        // ignore parse errors
+      }
+    };
+
+    ws.onerror = () => {
+      addLog("WebSocket connection error", "error");
+    };
+
+    ws.onclose = () => {
+      addLog("Connection to server closed", "warning");
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+    };
+  }, [sessionId, addLog]);
+
+  return { wsData, logs };
+}
+
 export default function Home() {
   const { toast } = useToast();
   const [activeMethod, setActiveMethod] = useState<"pairing" | "qr">("pairing");
-  const [currentSession, setCurrentSession] = useState<SessionResponse | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [initialResponse, setInitialResponse] = useState<SessionResponse | null>(null);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [copied, setCopied] = useState(false);
   const [copiedSession, setCopiedSession] = useState(false);
-  const [verificationCode, setVerificationCode] = useState("");
-  const [pollingActive, setPollingActive] = useState(false);
 
-  const { data: sessionStatus, refetch: refetchStatus } = useQuery<VerifyResponse>({
-    queryKey: [`/api/session/${currentSession?.sessionId}/status`],
-    enabled: !!currentSession?.sessionId && pollingActive,
-    refetchInterval: pollingActive ? 3000 : false,
-  });
-
-  useEffect(() => {
-    if (sessionStatus?.status === "connected" || sessionStatus?.status === "failed") {
-      setPollingActive(false);
-    }
-  }, [sessionStatus?.status]);
+  const { wsData, logs } = useWebSocket(currentSessionId);
 
   const generateMutation = useMutation({
     mutationFn: async (method: "pairing" | "qr") => {
@@ -142,8 +251,8 @@ export default function Home() {
       return (await res.json()) as SessionResponse;
     },
     onSuccess: (data) => {
-      setCurrentSession(data);
-      setPollingActive(true);
+      setCurrentSessionId(data.sessionId);
+      setInitialResponse(data);
       toast({ title: "Session Created", description: `Session ${data.sessionId} initialized` });
     },
     onError: (err: Error) => {
@@ -151,38 +260,15 @@ export default function Home() {
     },
   });
 
-  const verifyMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/verify-pairing", {
-        sessionId: currentSession?.sessionId,
-        code: verificationCode,
-      });
-      return (await res.json()) as VerifyResponse;
-    },
-    onSuccess: (data) => {
-      setCurrentSession((prev) =>
-        prev ? { ...prev, status: data.status } : null
-      );
-      if (data.status === "connected") {
-        toast({ title: "Connected", description: "WhatsApp linked successfully" });
-        setPollingActive(false);
-      }
-    },
-    onError: (err: Error) => {
-      toast({ title: "Verification Failed", description: err.message, variant: "destructive" });
-    },
-  });
-
   const terminateMutation = useMutation({
     mutationFn: async () => {
       await apiRequest("POST", "/api/terminate-session", {
-        sessionId: currentSession?.sessionId,
+        sessionId: currentSessionId,
       });
     },
     onSuccess: () => {
-      setCurrentSession(null);
-      setPollingActive(false);
-      setVerificationCode("");
+      setCurrentSessionId(null);
+      setInitialResponse(null);
       setPhoneNumber("");
       toast({ title: "Session Terminated", description: "All session data cleaned up" });
     },
@@ -205,7 +291,17 @@ export default function Home() {
     []
   );
 
-  const displayStatus = sessionStatus?.status || currentSession?.status || "pending";
+  const displayStatus: SessionStatus = wsData?.status || initialResponse?.status || "pending";
+  const displayPairingCode = wsData?.pairingCode || initialResponse?.pairingCode || null;
+  const displayQrCode = wsData?.qrCode || initialResponse?.qrCode || null;
+  const displayCredentials = wsData?.credentialsBase64 || null;
+
+  const formatPairingCode = (code: string): string => {
+    if (code.length === 8) {
+      return `${code.slice(0, 4)}-${code.slice(4)}`;
+    }
+    return code;
+  };
 
   return (
     <div className="min-h-screen bg-black text-white relative overflow-hidden">
@@ -263,7 +359,7 @@ export default function Home() {
                 </div>
                 <div>
                   <h2 className="text-lg font-bold text-white font-mono">Session Generator</h2>
-                  <p className="text-xs text-gray-500 font-mono">Initialize a new connection</p>
+                  <p className="text-xs text-gray-500 font-mono">Initialize a new WhatsApp connection</p>
                 </div>
               </div>
 
@@ -278,7 +374,7 @@ export default function Home() {
                   onClick={() => setActiveMethod("pairing")}
                 >
                   <Hash className="w-3.5 h-3.5" />
-                  8-Digit Pairing
+                  Pairing Code
                 </button>
                 <button
                   data-testid="button-method-qr"
@@ -311,28 +407,39 @@ export default function Home() {
                         className="w-full pl-10 pr-4 py-3 bg-black/50 border border-gray-800 rounded-lg font-mono text-sm text-white placeholder:text-gray-700 focus:outline-none focus:border-green-500/40 transition-colors"
                       />
                     </div>
+                    <p className="text-gray-600 text-[10px] font-mono mt-1.5">
+                      Include country code without + (e.g. 2348012345678)
+                    </p>
                   </div>
                 </div>
               )}
 
               {activeMethod === "qr" && (
                 <div className="text-center py-4">
-                  <p className="text-gray-500 text-xs font-mono mb-2">
-                    A QR code will be generated for WhatsApp Web scanning
-                  </p>
+                  <div className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-black/30 border border-gray-800/50">
+                    <QrCode className="w-4 h-4 text-green-500/50" />
+                    <p className="text-gray-500 text-xs font-mono">
+                      QR code will be generated from WhatsApp servers
+                    </p>
+                  </div>
                 </div>
               )}
 
               <button
                 data-testid="button-generate"
-                disabled={generateMutation.isPending || (activeMethod === "pairing" && !phoneNumber)}
+                disabled={generateMutation.isPending || (activeMethod === "pairing" && !phoneNumber) || !!currentSessionId}
                 onClick={() => generateMutation.mutate(activeMethod)}
                 className="w-full mt-6 flex items-center justify-center gap-2 px-6 py-3.5 bg-green-500/10 border border-green-500/30 rounded-lg font-mono text-sm text-green-400 transition-all hover:bg-green-500/20 hover:scale-[1.01] disabled:opacity-40 disabled:hover:scale-100 disabled:cursor-not-allowed"
               >
                 {generateMutation.isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Generating...
+                    Connecting to WhatsApp...
+                  </>
+                ) : currentSessionId ? (
+                  <>
+                    <Activity className="w-4 h-4" />
+                    Session Active
                   </>
                 ) : (
                   <>
@@ -343,7 +450,7 @@ export default function Home() {
               </button>
             </GlassCard>
 
-            {currentSession && (
+            {currentSessionId && (
               <GlassCard className="p-6 sm:p-8">
                 <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
                   <div className="flex items-center gap-3">
@@ -352,10 +459,10 @@ export default function Home() {
                     </div>
                     <div>
                       <h2 className="text-lg font-bold text-white font-mono">Active Session</h2>
-                      <p className="text-xs text-gray-500 font-mono">Real-time connection status</p>
+                      <p className="text-xs text-gray-500 font-mono">Real-time WhatsApp connection</p>
                     </div>
                   </div>
-                  <StatusBadge status={displayStatus as SessionStatus} />
+                  <StatusBadge status={displayStatus} />
                 </div>
 
                 <div className="space-y-4">
@@ -365,11 +472,11 @@ export default function Home() {
                     </label>
                     <div
                       className="flex items-center justify-between gap-3 p-3 bg-black/50 rounded-lg border border-gray-800/50 cursor-pointer transition-all hover:border-green-500/20"
-                      onClick={() => handleCopy(currentSession.sessionId, "session")}
+                      onClick={() => handleCopy(currentSessionId, "session")}
                       data-testid="button-copy-session"
                     >
-                      <span className="font-mono text-green-400 text-sm tracking-wider truncate">
-                        {currentSession.sessionId}
+                      <span className="font-mono text-green-400 text-sm tracking-wider truncate" data-testid="text-session-id">
+                        {currentSessionId}
                       </span>
                       {copiedSession ? (
                         <Check className="w-4 h-4 text-green-400 shrink-0" />
@@ -379,21 +486,22 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {currentSession.pairingCode && (
+                  {displayPairingCode && (
                     <div>
                       <label className="block text-gray-400 text-xs uppercase tracking-wider font-mono mb-2">
-                        8-Digit Pairing Code
+                        Pairing Code (alphanumeric)
                       </label>
                       <div
                         className="flex items-center justify-between gap-3 p-4 bg-black/50 rounded-lg border border-green-500/20 cursor-pointer transition-all hover:border-green-500/40"
-                        onClick={() => handleCopy(currentSession.pairingCode!, "code")}
+                        onClick={() => handleCopy(displayPairingCode, "code")}
                         data-testid="button-copy-pairing"
                       >
                         <span
                           className="font-mono text-2xl sm:text-3xl tracking-[0.3em] font-bold"
                           style={{ color: "#00ff00", textShadow: "0 0 20px rgba(0, 255, 0, 0.4)" }}
+                          data-testid="text-pairing-code"
                         >
-                          {currentSession.pairingCode.replace(/(\d{4})(\d{4})/, "$1 $2")}
+                          {formatPairingCode(displayPairingCode)}
                         </span>
                         {copied ? (
                           <Check className="w-5 h-5 text-green-400 shrink-0" />
@@ -407,14 +515,21 @@ export default function Home() {
                     </div>
                   )}
 
-                  {currentSession.qrCode && (
+                  {!displayPairingCode && activeMethod === "pairing" && displayStatus !== "connected" && displayStatus !== "failed" && (
+                    <div className="flex items-center justify-center gap-3 p-6 bg-black/30 rounded-lg border border-gray-800/30">
+                      <Loader2 className="w-5 h-5 text-green-400 animate-spin" />
+                      <span className="text-gray-400 font-mono text-sm">Requesting pairing code from WhatsApp...</span>
+                    </div>
+                  )}
+
+                  {displayQrCode && (
                     <div>
                       <label className="block text-gray-400 text-xs uppercase tracking-wider font-mono mb-2">
-                        Scan QR Code
+                        Scan QR Code with WhatsApp
                       </label>
                       <div className="flex justify-center p-6 bg-white rounded-lg">
                         <img
-                          src={currentSession.qrCode}
+                          src={displayQrCode}
                           alt="WhatsApp QR Code"
                           className="w-48 h-48 sm:w-56 sm:h-56"
                           data-testid="img-qr-code"
@@ -426,60 +541,51 @@ export default function Home() {
                     </div>
                   )}
 
-                  {currentSession.pairingCode && displayStatus === "pending" && (
-                    <div className="pt-2">
-                      <label className="block text-gray-400 text-xs uppercase tracking-wider font-mono mb-2">
-                        Verification Code
-                      </label>
-                      <div className="flex gap-3">
-                        <input
-                          data-testid="input-verify-code"
-                          type="text"
-                          maxLength={8}
-                          value={verificationCode}
-                          onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                          placeholder="Enter 8-digit code"
-                          className="flex-1 px-4 py-3 bg-black/50 border border-gray-800 rounded-lg font-mono text-sm text-white placeholder:text-gray-700 focus:outline-none focus:border-green-500/40 transition-colors"
-                        />
-                        <button
-                          data-testid="button-verify"
-                          disabled={verificationCode.length !== 8 || verifyMutation.isPending}
-                          onClick={() => verifyMutation.mutate()}
-                          className="px-5 py-3 bg-green-500/10 border border-green-500/30 rounded-lg font-mono text-xs text-green-400 transition-all hover:bg-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          {verifyMutation.isPending ? (
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                          ) : (
-                            "Verify"
-                          )}
-                        </button>
-                      </div>
+                  {!displayQrCode && activeMethod === "qr" && displayStatus !== "connected" && displayStatus !== "failed" && (
+                    <div className="flex items-center justify-center gap-3 p-6 bg-black/30 rounded-lg border border-gray-800/30">
+                      <Loader2 className="w-5 h-5 text-green-400 animate-spin" />
+                      <span className="text-gray-400 font-mono text-sm">Generating QR code from WhatsApp servers...</span>
                     </div>
                   )}
 
-                  {displayStatus === "connected" && sessionStatus?.credentialsBase64 && (
+                  {displayStatus === "connected" && displayCredentials && (
                     <div>
                       <label className="block text-gray-400 text-xs uppercase tracking-wider font-mono mb-2">
                         Session Credentials
                       </label>
                       <div className="p-3 bg-black/50 rounded-lg border border-green-500/20">
                         <code className="font-mono text-xs text-green-400/80 break-all leading-relaxed" data-testid="text-credentials">
-                          WOLF-BOT:~{sessionStatus.credentialsBase64}
+                          WOLF-BOT:~{displayCredentials}
                         </code>
+                      </div>
+                    </div>
+                  )}
+
+                  {displayStatus === "failed" && (
+                    <div className="flex items-center gap-3 p-4 bg-red-500/5 rounded-lg border border-red-500/20">
+                      <AlertCircle className="w-5 h-5 text-red-400 shrink-0" />
+                      <div>
+                        <p className="text-red-400 font-mono text-sm font-medium">Connection Failed</p>
+                        <p className="text-red-400/60 font-mono text-xs mt-0.5">Terminate and try again with a valid number</p>
                       </div>
                     </div>
                   )}
                 </div>
 
+                {logs.length > 0 && (
+                  <div className="mt-5 p-3 bg-black/50 rounded-lg border border-gray-800/30 max-h-32 overflow-y-auto">
+                    <label className="block text-gray-500 text-[10px] uppercase tracking-wider font-mono mb-2">
+                      Connection Log
+                    </label>
+                    <div className="space-y-1" data-testid="connection-log">
+                      {logs.map((log, i) => (
+                        <LogEntry key={i} text={log.text} type={log.type} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex gap-3 mt-6 flex-wrap">
-                  <button
-                    data-testid="button-refresh"
-                    onClick={() => refetchStatus()}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-gray-800/50 border border-gray-700 rounded-lg font-mono text-xs text-gray-400 transition-all hover:border-green-500/40 hover:text-gray-300"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Refresh
-                  </button>
                   <button
                     data-testid="button-terminate"
                     onClick={() => terminateMutation.mutate()}
@@ -491,7 +597,7 @@ export default function Home() {
                     ) : (
                       <Trash2 className="w-3.5 h-3.5" />
                     )}
-                    Terminate
+                    Terminate Session
                   </button>
                 </div>
               </GlassCard>
@@ -552,17 +658,17 @@ export default function Home() {
               <FeatureCard
                 icon={Zap}
                 title="Instant Generation"
-                desc="Session IDs generated in milliseconds"
+                desc="Real WhatsApp server connections"
               />
               <FeatureCard
                 icon={Activity}
                 title="Real-time Status"
-                desc="Live connection monitoring & updates"
+                desc="Live WebSocket connection updates"
               />
               <FeatureCard
                 icon={SiWhatsapp}
                 title="WhatsApp Multi-Device"
-                desc="Compatible with multi-device beta"
+                desc="Compatible with multi-device linking"
               />
             </div>
 
@@ -572,7 +678,7 @@ export default function Home() {
                 <span className="text-xs font-mono text-yellow-500/70 uppercase tracking-wider">Notice</span>
               </div>
               <p className="text-gray-500 text-xs font-mono leading-relaxed">
-                This tool generates session credentials for WOLFBOT. Keep your session ID private and never share it publicly. Sessions auto-expire after 5 minutes of inactivity.
+                This tool connects to real WhatsApp servers via Baileys. Keep your session ID private. Sessions auto-expire after 5 minutes of inactivity.
               </p>
             </GlassCard>
           </div>

