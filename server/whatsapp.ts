@@ -61,15 +61,17 @@ function cleanupAuthDir(sessionId: string): void {
   }
 }
 
-function generateCredentials(sessionId: string, phoneNumber?: string): string {
-  const payload = JSON.stringify({
-    sessionId,
-    ts: Date.now(),
-    key: randomBytes(32).toString("hex"),
-    device: "multi",
-    phone: phoneNumber || "unknown",
-  });
-  return Buffer.from(payload).toString("base64");
+function readRealCredentials(authDir: string): string | null {
+  try {
+    const credsPath = path.join(authDir, "creds.json");
+    if (fs.existsSync(credsPath)) {
+      const credsData = fs.readFileSync(credsPath, "utf-8");
+      return Buffer.from(credsData).toString("base64");
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
 }
 
 export function getSession(sessionId: string): WASession | undefined {
@@ -239,7 +241,19 @@ async function connectSession(session: WASession): Promise<void> {
       session.status = "connected";
       session.linkedAt = new Date().toISOString();
       session.retryCount = 0;
-      session.credentialsBase64 = generateCredentials(session.sessionId, session.phoneNumber);
+
+      await saveCreds();
+      await new Promise((r) => setTimeout(r, 500));
+
+      const realCreds = readRealCredentials(session.authDir);
+      if (realCreds) {
+        session.credentialsBase64 = realCreds;
+        log(`Read real WhatsApp credentials for session ${session.sessionId} (${realCreds.length} chars)`, "whatsapp");
+      } else {
+        log(`Warning: Could not read creds.json for session ${session.sessionId}`, "whatsapp");
+        session.credentialsBase64 = "";
+      }
+
       notifyListeners(session, "status", {
         status: "connected",
         credentialsBase64: session.credentialsBase64,
