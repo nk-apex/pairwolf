@@ -101,8 +101,8 @@ function StatusBadge({ status }: { status: SessionStatus }) {
 
 function FeatureCard({ icon: Icon, title, desc }: { icon: React.ElementType; title: string; desc: string }) {
   return (
-    <GlassCard hoverable className="p-5">
-      <div className="flex items-start gap-4">
+    <GlassCard hoverable className="p-4 sm:p-5">
+      <div className="flex items-start gap-3 sm:gap-4">
         <div className="p-2.5 rounded-lg bg-green-500/10 border border-green-500/20 shrink-0">
           <Icon className="w-5 h-5 text-green-400" />
         </div>
@@ -323,15 +323,15 @@ export default function Home() {
         />
       </div>
 
-      <div className="relative z-10 max-w-6xl mx-auto px-4 sm:px-6 py-8 sm:py-12">
-        <header className="text-center mb-12 sm:mb-16">
+      <div className="relative z-10 max-w-6xl mx-auto px-3 sm:px-6 py-6 sm:py-12">
+        <header className="text-center mb-8 sm:mb-16">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-green-500/20 bg-green-500/5 mb-6">
             <Bot className="w-3.5 h-3.5 text-green-400" />
             <span className="font-mono text-xs text-green-400 tracking-wider" data-testid="text-version">
               v2.0.0-beta
             </span>
           </div>
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold mb-4 tracking-tight">
+          <h1 className="text-3xl sm:text-5xl lg:text-6xl font-bold mb-4 tracking-tight">
             <GlowText>WOLF</GlowText>
             <span className="text-white">BOT</span>
           </h1>
@@ -353,15 +353,15 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="grid lg:grid-cols-5 gap-6 lg:gap-8">
-          <div className="lg:col-span-3 space-y-6">
-            <GlassCard className="p-6 sm:p-8">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-6 md:gap-8">
+          <div className="md:col-span-3 space-y-6">
+            <GlassCard className="p-4 sm:p-6 md:p-8">
               <div className="flex items-center gap-3 mb-6">
                 <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/20">
                   <Terminal className="w-5 h-5 text-green-400" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-white font-mono">WolfBot Pair</h2>
+                  <h2 className="text-base sm:text-lg font-bold text-white font-mono">WolfBot Pair</h2>
                   <p className="text-xs text-gray-500 font-mono">Initialize a new WhatsApp connection</p>
                 </div>
               </div>
@@ -454,14 +454,14 @@ export default function Home() {
             </GlassCard>
 
             {currentSessionId && (
-              <GlassCard className="p-6 sm:p-8">
+              <GlassCard className="p-4 sm:p-6 md:p-8">
                 <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
                   <div className="flex items-center gap-3">
                     <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/20">
                       <Wifi className="w-5 h-5 text-green-400" />
                     </div>
                     <div>
-                      <h2 className="text-lg font-bold text-white font-mono">Active Session</h2>
+                      <h2 className="text-base sm:text-lg font-bold text-white font-mono">Active Session</h2>
                       <p className="text-xs text-gray-500 font-mono">Real-time WhatsApp connection</p>
                     </div>
                   </div>
@@ -500,7 +500,7 @@ export default function Home() {
                         data-testid="button-copy-pairing"
                       >
                         <span
-                          className="font-mono text-2xl sm:text-3xl tracking-[0.3em] font-bold"
+                          className="font-mono text-xl sm:text-2xl md:text-3xl tracking-[0.2em] sm:tracking-[0.3em] font-bold"
                           style={{ color: "#00ff00", textShadow: "0 0 20px rgba(0, 255, 0, 0.4)" }}
                           data-testid="text-pairing-code"
                         >
@@ -519,9 +519,9 @@ export default function Home() {
                   )}
 
                   {!displayPairingCode && activeMethod === "pairing" && displayStatus !== "connected" && displayStatus !== "failed" && (
-                    <div className="flex items-center justify-center gap-3 p-6 bg-black/30 rounded-lg border border-gray-800/30">
-                      <Loader2 className="w-5 h-5 text-green-400 animate-spin" />
-                      <span className="text-gray-400 font-mono text-sm">Requesting pairing code from WhatsApp...</span>
+                    <div className="flex items-center justify-center gap-3 p-4 sm:p-6 bg-black/30 rounded-lg border border-gray-800/30">
+                      <Loader2 className="w-5 h-5 text-green-400 animate-spin shrink-0" />
+                      <span className="text-gray-400 font-mono text-xs sm:text-sm">Requesting pairing code from WhatsApp...</span>
                     </div>
                   )}
 
@@ -545,9 +545,9 @@ export default function Home() {
                   )}
 
                   {!displayQrCode && activeMethod === "qr" && displayStatus !== "connected" && displayStatus !== "failed" && (
-                    <div className="flex items-center justify-center gap-3 p-6 bg-black/30 rounded-lg border border-gray-800/30">
-                      <Loader2 className="w-5 h-5 text-green-400 animate-spin" />
-                      <span className="text-gray-400 font-mono text-sm">Generating QR code from WhatsApp servers...</span>
+                    <div className="flex items-center justify-center gap-3 p-4 sm:p-6 bg-black/30 rounded-lg border border-gray-800/30">
+                      <Loader2 className="w-5 h-5 text-green-400 animate-spin shrink-0" />
+                      <span className="text-gray-400 font-mono text-xs sm:text-sm">Generating QR code from WhatsApp servers...</span>
                     </div>
                   )}
 
@@ -607,8 +607,8 @@ export default function Home() {
             )}
           </div>
 
-          <div className="lg:col-span-2 space-y-6">
-            <GlassCard className="p-6">
+          <div className="md:col-span-2 space-y-6">
+            <GlassCard className="p-4 sm:p-6">
               <div className="flex items-center gap-3 mb-5">
                 <div className="p-2 rounded-lg bg-green-500/10 border border-green-500/20">
                   <Link2 className="w-5 h-5 text-green-400" />
@@ -623,11 +623,11 @@ export default function Home() {
                   href="https://github.com/7silent-wolf/silentwolf.git"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-3 p-4 rounded-lg bg-black/30 border border-gray-800/30 transition-all duration-200 hover:border-green-500/30 hover:bg-green-500/5 group cursor-pointer"
+                  className="flex items-center gap-3 p-3 sm:p-4 rounded-lg bg-black/30 border border-gray-800/30 transition-all duration-200 hover:border-green-500/30 hover:bg-green-500/5 group cursor-pointer"
                   data-testid="link-github-repo"
                 >
-                  <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center shrink-0">
-                    <SiGithub className="w-5 h-5 text-green-400" />
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-green-500/10 flex items-center justify-center shrink-0">
+                    <SiGithub className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-white text-sm font-mono font-medium">Github Repo</p>
@@ -639,11 +639,11 @@ export default function Home() {
                   href="https://inspiring-genie-ebae09.netlify.app/"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-3 p-4 rounded-lg bg-black/30 border border-gray-800/30 transition-all duration-200 hover:border-green-500/30 hover:bg-green-500/5 group cursor-pointer"
+                  className="flex items-center gap-3 p-3 sm:p-4 rounded-lg bg-black/30 border border-gray-800/30 transition-all duration-200 hover:border-green-500/30 hover:bg-green-500/5 group cursor-pointer"
                   data-testid="link-deploy-wolfbot"
                 >
-                  <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center shrink-0">
-                    <Rocket className="w-5 h-5 text-green-400" />
+                  <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-full bg-green-500/10 flex items-center justify-center shrink-0">
+                    <Rocket className="w-4 h-4 sm:w-5 sm:h-5 text-green-400" />
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="text-white text-sm font-mono font-medium">Deploy WolfBot</p>
@@ -677,7 +677,7 @@ export default function Home() {
               />
             </div>
 
-            <GlassCard className="p-5">
+            <GlassCard className="p-4 sm:p-5">
               <div className="flex items-center gap-2 mb-3">
                 <AlertCircle className="w-4 h-4 text-yellow-500/70" />
                 <span className="text-xs font-mono text-yellow-500/70 uppercase tracking-wider">Notice</span>
@@ -689,7 +689,7 @@ export default function Home() {
           </div>
         </div>
 
-        <footer className="mt-16 text-center border-t border-gray-800/50 pt-8 pb-4">
+        <footer className="mt-10 sm:mt-16 text-center border-t border-gray-800/50 pt-6 sm:pt-8 pb-4">
           <div className="flex items-center justify-center gap-2 mb-3">
             <Bot className="w-4 h-4 text-green-500/40" />
             <span className="font-mono text-xs text-gray-600">WOLFBOT Pair</span>
